@@ -118,10 +118,8 @@ class FabricCollectlExecutor:
             stderr_tuple = tempfile.mkstemp()
             os.close(stderr_tuple[0])
             self.stderr_file = stderr_tuple[1]
-
         command_line = self.collectl_command_line_builder.get(self.rawp_file)
         local("%s 2> %s" % (command_line, self.stderr_file))
-
         if self.stderr_temp:
             os.remove(self.stderr_file)
 
