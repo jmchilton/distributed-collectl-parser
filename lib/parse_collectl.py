@@ -10,7 +10,7 @@ import threading
 import Queue
 
 from fabric.api import local
-
+from fabric.context_managers import settings
 # parse_collectl.py  --directory /project/collectl --hosts itasca,koronis,elmo,calhoun --num_threads 4
 
 # regexp to match executables we don't care about and which shouldn't be recorded (mostly system tools).
@@ -103,7 +103,9 @@ class FabricCollectlExecutor:
         self.stderr_file = stderr_file
         self.stderr_temp = stderr_file is None
 
-        self.collectl_output_file = tempfile.mkstemp()
+        stdout = tempfile.mkstemp()
+        os.close(stdout[0])
+        self.collectl_output_file = stdout[1]
         self.collectl_command_line_builder = CollectlCommandLineBuilder(collectl_path)
 
     def execute_collectl(self):
@@ -112,7 +114,15 @@ class FabricCollectlExecutor:
             os.close(stderr_tuple[0])
             self.stderr_file = stderr_tuple[1]
         command_line = self.collectl_command_line_builder.get(self.rawp_file)
-        local("%s > %s 2> %s" % (command_line, self.collectl_output_file[0], self.stderr_file))
+        # We will manually check return code
+        with settings(warn_only=True):
+            command_output = local("%s > %s 2> %s" % (command_line, self.collectl_output_file, self.stderr_file))
+            return_code = command_output.return_code
+
+        if return_code != 0:
+            stderr_contents = self.__read_stderr()
+            raise RuntimeError("collectl did not return a status code of 0, process standard error was %s" % stderr_contents)
+
         if self.stderr_temp:
             os.remove(self.stderr_file)
 
@@ -125,10 +135,10 @@ class FabricCollectlExecutor:
             file.close()
 
     def output_file(self):
-        return self.collectl_output_file[1]
+        return self.collectl_output_file
 
     def remove_output_file(self):
-        os.remove(self.collectl_output_file[1])
+        os.remove(self.collectl_output_file)
 
 
 class LocalCollectlExecutorFactory:
