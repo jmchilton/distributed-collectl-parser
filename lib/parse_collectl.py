@@ -103,6 +103,47 @@ class FabricCollectlExecutor:
     """
     """
 
+    def __init__(self, rawp_file, stderr_file=None, collectl_path=None):
+        self.rawp_file = rawp_file
+        self.stderr_file = stderr_file
+        self.stderr_temp = stderr_file is None
+
+        self.collectl_output_file = tempfile.mkstemp()
+        self.collectl_command_line_builder = CollectlCommandLineBuilder(collectl_path)
+
+
+    def execute_collectl(self):
+      if self.stderr_temp:
+        stderr_tuple = tempfile.mkstemp()
+        os.close(stderr_tuple[0])
+        self.stderr_file = stderr_tuple[1]
+
+    command_line = self.collectl_command_line_builder.get(self.rawp_file)
+    local("command_line > ")
+
+      if self.stderr_temp:
+        os.remove(self.stderr_file)    
+
+  def __read_stderr(self):
+    file = open(self.stderr_file, 'r')
+    try:
+      contents = file.read()
+      return contents
+    finally:
+      file.close()
+
+  def output_file(self):
+    return self.collectl_output_file[1]
+  
+  def remove_output_file(self):
+    os.remove(self.collectl_output_file[1])
+
+
+
+
+
+
+
 
 class LocalCollectlExecutorFactory:
     """
@@ -666,7 +707,7 @@ class CollectlFileScanner:
         executor.execute_collectl()
         collectl_output_file = executor.output_file()
         executions = self.collectl_summary_factory.build_for(collectl_output_file)
-        self.collectl_executor.remove_output_file()
+        executor.remove_output_file()
         execution_merger = CollectlExecutionMerger()
         execution_merger.merge(executions)
         executions = execution_merger.get_merged_executions()
