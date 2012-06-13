@@ -9,6 +9,8 @@ import time
 import threading
 import Queue
 
+from fabric.api import local
+
 # parse_collectl.py  --directory /project/collectl --hosts itasca,koronis,elmo,calhoun --num_threads 4
 
 # regexp to match executables we don't care about and which shouldn't be recorded (mostly system tools).
@@ -111,32 +113,31 @@ class FabricCollectlExecutor:
         self.collectl_output_file = tempfile.mkstemp()
         self.collectl_command_line_builder = CollectlCommandLineBuilder(collectl_path)
 
-
     def execute_collectl(self):
-      if self.stderr_temp:
-        stderr_tuple = tempfile.mkstemp()
-        os.close(stderr_tuple[0])
-        self.stderr_file = stderr_tuple[1]
+        if self.stderr_temp:
+            stderr_tuple = tempfile.mkstemp()
+            os.close(stderr_tuple[0])
+            self.stderr_file = stderr_tuple[1]
 
-    command_line = self.collectl_command_line_builder.get(self.rawp_file)
-    local("command_line > ")
+        command_line = self.collectl_command_line_builder.get(self.rawp_file)
+        local("%s 2> %s" % (command_line, self.stderr_file))
 
-      if self.stderr_temp:
-        os.remove(self.stderr_file)    
+        if self.stderr_temp:
+            os.remove(self.stderr_file)
 
-  def __read_stderr(self):
-    file = open(self.stderr_file, 'r')
-    try:
-      contents = file.read()
-      return contents
-    finally:
-      file.close()
+    def __read_stderr(self):
+        file = open(self.stderr_file, 'r')
+        try:
+            contents = file.read()
+            return contents
+        finally:
+            file.close()
 
-  def output_file(self):
-    return self.collectl_output_file[1]
+    def output_file(self):
+        return self.collectl_output_file[1]
   
-  def remove_output_file(self):
-    os.remove(self.collectl_output_file[1])
+    def remove_output_file(self):
+        os.remove(self.collectl_output_file[1])
 
 
 
