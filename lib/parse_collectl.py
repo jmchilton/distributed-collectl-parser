@@ -819,7 +819,7 @@ class CollectlDirectoryScanner:
     self.all_items_added = False
 
     for i in range(self.options.num_threads):
-      CollectlConsumer(queue)
+      CollectlConsumer(self.queue)
 
     for file_parser in self.get_node_scanners():
       self.queue.put(file_parser, True)
