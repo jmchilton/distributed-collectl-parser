@@ -88,6 +88,19 @@ class FabricCollectlExecutor:
         pass
 
 
+class FabricCollectlExecutorFactory:
+    """
+    """
+
+    def __init__(self, host):
+        self.host = host
+
+    def get_collectl_executor(self, rawp_file, stderr_file=None, collectl_path=None):
+        return FabricCollectlExecutor(self.host, rawp_file, stderr_file, collectl_path)
+
+class FabricCollectlExecutor:
+    
+
 class LocalCollectlExecutorFactory:
     """
     >>> import tempfile
@@ -630,7 +643,6 @@ class CollectlFileScanner:
         stderr_path = None
         if not options.use_db():
             stderr_path = self.__stderr_file(relative_file_path)
-        #self.collectl_executor = CollectlExecutor(rawp_file, stderr_path, options.collectl_path)
         self.rawp_file = rawp_file
         self.stderr_path = stderr_path
         self.collectl_path = options.collectl_path
@@ -649,7 +661,7 @@ class CollectlFileScanner:
         self.log_start()
         executor = collectl_executor_factory.get_collectl_executor(self.rawp_file, self.stderr_path, self.collectl_path)
         executor.execute_collectl()
-        collectl_output_file = self.collectl_executor.output_file()
+        collectl_output_file = executor.output_file()
         executions = self.collectl_summary_factory.build_for(collectl_output_file)
         self.collectl_executor.remove_output_file()
         execution_merger = CollectlExecutionMerger()
@@ -657,6 +669,7 @@ class CollectlFileScanner:
         executions = execution_merger.get_merged_executions()
         self.collectl_sql_dumper_factory.get_dumper().dump(executions, self.node_name, self.rawp_file)
         self.log_end()
+
 
 class FileLogRecorder:
 
@@ -727,6 +740,27 @@ class LogRecorder:
   def log_end(self, filename):
     self.delegate.log_end(filename)
 
+
+class CollectlConsumer:
+
+    def __init__(self, queue):
+        self.queue = queue
+        self.collectl_executor_factory = LocalCollectlExecutorFactory()
+        t = threading.Thread(target=self.execute_file_parser)
+        t.daemon = True
+        t.start()
+
+    def execute_file_parser(self):
+        while True:
+            file_parser = self.queue.get()
+            try:
+                file_parser.execute(self.collectl_executor_factory)
+            except Exception, err:
+                sys.stderr.write('ERROR: %s\n' % str(err))
+            finally:
+                self.queue.task_done()
+
+
 class CollectlDirectoryScanner:
   """
   >>> import tempfile, shutil, os
@@ -776,26 +810,13 @@ class CollectlDirectoryScanner:
         self.batch_count = self.batch_count + 1
         yield self.__build_file_parser(dir_file)
 
-  def execute_file_parser(self):
-    while True:
-      file_parser = self.queue.get()
-      try:
-        file_parser.execute(self.collectl_executor_factory)
-      except Exception, err:
-        sys.stderr.write('ERROR: %s\n' % str(err))
-      finally:
-        self.queue.task_done()
 
   def execute(self):
     self.queue = Queue.Queue(32)
     self.all_items_added = False
 
-    threads = []
     for i in range(self.options.num_threads):
-      t = threading.Thread(target=self.execute_file_parser)
-      t.daemon = True
-      threads.append(t)
-      t.start()
+      CollectlConsumer(queue)
 
     for file_parser in self.get_node_scanners():
       self.queue.put(file_parser, True)
@@ -830,7 +851,6 @@ class CollectlDirectoryScanner:
     self.batch_size = options.batch_size
     self.log_recorder = LogRecorder(options, host)
     self.batch_count = 0
-    self.collectl_executor_factory = LocalCollectlExecutorFactory()
 
 
   
