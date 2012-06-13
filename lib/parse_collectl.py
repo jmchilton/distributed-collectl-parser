@@ -82,14 +82,6 @@ class DateCutoffType:
   none, both, start, end = range(4)
 
 
-class FabricCollectlExecutor:
-    """
-    """
-
-    def __init__(self, rawp_file, stderr_file=None, collectl_path=None):
-        pass
-
-
 class FabricCollectlExecutorFactory:
     """
     """
@@ -105,7 +97,8 @@ class FabricCollectlExecutor:
     """
     """
 
-    def __init__(self, rawp_file, stderr_file=None, collectl_path=None):
+    def __init__(self, host, rawp_file, stderr_file=None, collectl_path=None):
+        self.host = host
         self.rawp_file = rawp_file
         self.stderr_file = stderr_file
         self.stderr_temp = stderr_file is None
@@ -119,7 +112,7 @@ class FabricCollectlExecutor:
             os.close(stderr_tuple[0])
             self.stderr_file = stderr_tuple[1]
         command_line = self.collectl_command_line_builder.get(self.rawp_file)
-        local("%s 2> %s" % (command_line, self.stderr_file))
+        local("%s > %s 2> %s" % (command_line, self.collectl_output_file[0], self.stderr_file))
         if self.stderr_temp:
             os.remove(self.stderr_file)
 
@@ -782,7 +775,7 @@ class CollectlConsumer:
 
     def __init__(self, queue):
         self.queue = queue
-        self.collectl_executor_factory = FabricCollectlExecutorFactory()
+        self.collectl_executor_factory = FabricCollectlExecutorFactory("localhost")
         t = threading.Thread(target=self.execute_file_parser)
         t.daemon = True
         t.start()
