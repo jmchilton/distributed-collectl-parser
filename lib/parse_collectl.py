@@ -11,38 +11,44 @@ import Queue
 
 # parse_collectl.py  --directory /project/collectl --hosts itasca,koronis,elmo,calhoun --num_threads 4
 
-# regexp to match executables we don't care about and which shouldn't be recorded (mostly system tools). 
+# regexp to match executables we don't care about and which shouldn't be recorded (mostly system tools).
 BLACKLIST = "^(sshd|sshd:|/bin/.*|python|sh|perl|-?bash|cat|csh|.*/a.out|a.out|/usr/bin/ssh|ssh|/usr/bin/time|xargs|orted|mpirun|cp|pbs_demux|/opt/torque/.*|/opt/platform_mpi/.*|rm|.*workerbee.*|/usr/bin/python|touch|env|date|/usr/bin/perl|sleep|grep|/opt/openmpi/.*|.*/modulecmd|tee|gzip|tar|vi|make|/usr/bin/sh|less|/usr/bin/make|mv|pico|vim|scp|tail|sed|top|rsh|head|rsync|wc|awk|man|find)$"
 MERGE_LIST = "^(.*g09.*|l\d+\.exel?)$"
 
+
 def merge_executable(executable):
-  return re.match(MERGE_LIST, executable) is not None
+    return re.match(MERGE_LIST, executable) is not None
+
 
 def filter_executable(executable):
-  return re.match(BLACKLIST, executable) is not None
+    return re.match(BLACKLIST, executable) is not None
+
 
 def filter_uid(uid):
-  return not re.match("^\d+$", uid)
+    return not re.match("^\d+$", uid)
+
 
 def to_postgres_date(time_object):
-  """
-  >>> time_tuple = CollectlSummary.parse_timestamp('20110831 15:29:59')
-  >>> to_postgres_date(time_tuple)
-  '2011-08-31 15:29:59'
-  >>> to_postgres_date(datetime(*time_tuple[0:6]))
-  '2011-08-31 15:29:59'
-  """
-  time_tuple = time_object
-  if isinstance(time_object, datetime):
-    time_tuple = time_object.timetuple()
-  return time.strftime("%Y-%m-%d %H:%M:%S", time_tuple)
+    """
+    >>> time_tuple = CollectlSummary.parse_timestamp('20110831 15:29:59')
+    >>> to_postgres_date(time_tuple)
+    '2011-08-31 15:29:59'
+    >>> to_postgres_date(datetime(*time_tuple[0:6]))
+    '2011-08-31 15:29:59'
+    """
+    time_tuple = time_object
+    if isinstance(time_object, datetime):
+        time_tuple = time_object.timetuple()
+    return time.strftime("%Y-%m-%d %H:%M:%S", time_tuple)
+
 
 def escape_quotes(str):
-  """
-  >>> escape_quotes("'")
-  "''"
-  """
-  return str.replace('\'', '\'\'')
+    """
+    >>> escape_quotes("'")
+    "''"
+    """
+    return str.replace('\'', '\'\'')
+
 
 class CollectlCommandLineBuilder:
 
@@ -64,6 +70,7 @@ class CollectlCommandLineBuilder:
     """
     return "%s -sZ -P --sep=9 -p %s" % (self.collectl_path, rawp_path)
 
+
 class TestCommandLineBuilder:
 
   def get(self, rawp_path): 
@@ -72,17 +79,33 @@ class TestCommandLineBuilder:
 class DateCutoffType:
   none, both, start, end = range(4)
 
+
+class FabricCollectlExecutor:
+    """
+    """
+
+    def __init__(self, rawp_file, stderr_file=None, collectl_path=None):
+        pass
+
+
+class LocalCollectlExecutorFactory:
+    """
+    >>> import tempfile
+    >>> stderr_file = tempfile.mkstemp()
+    >>> executor_factory = LocalCollectlExecutorFactory()
+    >>> executor = executor_factory.execute_collectl("/project/collectl/itsaca/node0506-20110819-000100.rawp.gz", stderr_file[1])
+    >>> executor.collectl_command_line_builder = TestCommandLineBuilder()
+    >>> executor.execute_collectl()
+    >>> contents = open(executor.output_file(), "r").read()
+    >>> contents.strip()
+    'Hello World'
+    """
+    def get_collectl_executor(self, rawp_file, stderr_file=None, collectl_path=None):
+        return CollectlExecutor(rawp_file, stderr_file, collectl_path)
+
+
 class CollectlExecutor:
-  """
-  >>> import tempfile 
-  >>> stderr_file = tempfile.mkstemp()
-  >>> executor = CollectlExecutor("/project/collectl/itsaca/node0506-20110819-000100.rawp.gz", stderr_file[1])
-  >>> executor.collectl_command_line_builder = TestCommandLineBuilder()
-  >>> executor.execute_collectl()
-  >>> contents = open(executor.output_file(), "r").read()
-  >>> contents.strip()
-  'Hello World'
-  """
+
   def __init__(self, rawp_file, stderr_file = None, collectl_path = None):
     self.rawp_file = rawp_file
     self.stderr_file = stderr_file
@@ -590,49 +613,50 @@ class CollectlExecutionMerger:
     
   def get_merged_executions(self):
     return self.merged_executions
-  
 
 
 class CollectlFileScanner:
-  """
-  
-  """
+    """
+    """
 
-  def __stderr_file(self, log_file_path_prefix):
-    return os.path.join(os.path.join(self.options.log_directory, self.host), log_file_path_prefix + "-stderr")
+    def __stderr_file(self, log_file_path_prefix):
+        return os.path.join(os.path.join(self.options.log_directory, self.host), log_file_path_prefix + "-stderr")
 
-  def __init__(self, options, host, node_name, rawp_file, relative_file_path, log_recorder):
-    self.options = options
-    self.host = host
-    self.node_name = node_name
-    self.rawp_file = rawp_file
-    stderr_path = None
-    if not options.use_db():
-      stderr_path = self.__stderr_file(relative_file_path)
-    self.collectl_executor = CollectlExecutor(rawp_file, stderr_path, options.collectl_path)
-    self.collectl_summary_factory = CollectlSummaryFactory()
-    self.collectl_sql_dumper_factory = CollectlSqlDumperFactroy(options)
-    self.relative_file_path = relative_file_path
-    self.log_recorder = log_recorder
+    def __init__(self, options, host, node_name, rawp_file, relative_file_path, log_recorder):
+        self.options = options
+        self.host = host
+        self.node_name = node_name
+        self.rawp_file = rawp_file
+        stderr_path = None
+        if not options.use_db():
+            stderr_path = self.__stderr_file(relative_file_path)
+        #self.collectl_executor = CollectlExecutor(rawp_file, stderr_path, options.collectl_path)
+        self.rawp_file = rawp_file
+        self.stderr_path = stderr_path
+        self.collectl_path = options.collectl_path
+        self.collectl_summary_factory = CollectlSummaryFactory()
+        self.collectl_sql_dumper_factory = CollectlSqlDumperFactroy(options)
+        self.relative_file_path = relative_file_path
+        self.log_recorder = log_recorder
 
-  def log_start(self):
-    self.log_recorder.log_start(self.relative_file_path)
+    def log_start(self):
+        self.log_recorder.log_start(self.relative_file_path)
 
-  def log_end(self):
-    self.log_recorder.log_end(self.relative_file_path)
+    def log_end(self):
+        self.log_recorder.log_end(self.relative_file_path)
 
-
-  def execute(self):
-    self.log_start()
-    self.collectl_executor.execute_collectl()
-    collectl_output_file = self.collectl_executor.output_file()
-    executions = self.collectl_summary_factory.build_for(collectl_output_file)
-    self.collectl_executor.remove_output_file()
-    execution_merger = CollectlExecutionMerger()
-    execution_merger.merge(executions)
-    executions = execution_merger.get_merged_executions()
-    self.collectl_sql_dumper_factory.get_dumper().dump(executions, self.node_name, self.rawp_file)
-    self.log_end()
+    def execute(self, collectl_executor_factory):
+        self.log_start()
+        executor = collectl_executor_factory.get_collectl_executor(self.rawp_file, self.stderr_path, self.collectl_path)
+        executor.execute_collectl()
+        collectl_output_file = self.collectl_executor.output_file()
+        executions = self.collectl_summary_factory.build_for(collectl_output_file)
+        self.collectl_executor.remove_output_file()
+        execution_merger = CollectlExecutionMerger()
+        execution_merger.merge(executions)
+        executions = execution_merger.get_merged_executions()
+        self.collectl_sql_dumper_factory.get_dumper().dump(executions, self.node_name, self.rawp_file)
+        self.log_end()
 
 class FileLogRecorder:
 
@@ -756,7 +780,7 @@ class CollectlDirectoryScanner:
     while True:
       file_parser = self.queue.get()
       try:
-        file_parser.execute()
+        file_parser.execute(self.collectl_executor_factory)
       except Exception, err:
         sys.stderr.write('ERROR: %s\n' % str(err))
       finally:
@@ -806,6 +830,9 @@ class CollectlDirectoryScanner:
     self.batch_size = options.batch_size
     self.log_recorder = LogRecorder(options, host)
     self.batch_count = 0
+    self.collectl_executor_factory = LocalCollectlExecutorFactory()
+
+
   
 def has_text(input):
   """
