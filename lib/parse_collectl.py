@@ -98,8 +98,11 @@ class FabricCollectlExecutorFactory:
     def get_collectl_executor(self, rawp_file, stderr_file=None, collectl_path=None):
         return FabricCollectlExecutor(self.host, rawp_file, stderr_file, collectl_path)
 
+
 class FabricCollectlExecutor:
-    
+    """
+    """
+
 
 class LocalCollectlExecutorFactory:
     """
