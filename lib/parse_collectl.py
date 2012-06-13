@@ -133,15 +133,9 @@ class FabricCollectlExecutor:
 
     def output_file(self):
         return self.collectl_output_file[1]
-  
+
     def remove_output_file(self):
         os.remove(self.collectl_output_file[1])
-
-
-
-
-
-
 
 
 class LocalCollectlExecutorFactory:
@@ -788,7 +782,7 @@ class CollectlConsumer:
 
     def __init__(self, queue):
         self.queue = queue
-        self.collectl_executor_factory = LocalCollectlExecutorFactory()
+        self.collectl_executor_factory = FabricCollectlExecutorFactory()
         t = threading.Thread(target=self.execute_file_parser)
         t.daemon = True
         t.start()
