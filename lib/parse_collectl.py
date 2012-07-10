@@ -9,7 +9,10 @@ import time
 import threading
 import Queue
 
-from fabric.api import run, get, put, env
+import yaml
+
+from fabric.api import run, get, put, env, execute, local, task
+from fabric.tasks import Task
 from fabric.context_managers import settings
 # parse_collectl.py  --directory /project/collectl --hosts itasca,koronis,elmo,calhoun --num_threads 4
 
@@ -83,23 +86,33 @@ class DateCutoffType:
     none, both, start, end = range(4)
 
 
-class FabricCollectlExecutorFactory:
+class FabricCollectlExecutorFactory(Task):
     """
     """
 
-    def __init__(self, host):
-        self.host = host
+    def __init__(self, host, user, collectl_path=None):
+        self.exec_args = {"host": host}
+        if user:
+            self.exec_args["host"] = "%s@%s" % (user, host)
+        self.collectl_path = collectl_path
+        print "Instantiating Executor Factory"
+        execute(self, **self.exec_args)
 
-    def get_collectl_executor(self, rawp_file, stderr_file=None, collectl_path=None):
-        return FabricCollectlExecutor(self.host, rawp_file, stderr_file, collectl_path)
+    def get_collectl_executor(self, rawp_file, stderr_file=None):
+        return FabricCollectlExecutor(self.exec_args, rawp_file, stderr_file, "/tmp/collectl/collectl.pl")
+
+    def run(self):
+        print self.collectl_path
+        put(os.path.dirname(self.collectl_path), "/tmp/")
+        run("chmod +x /tmp/collectl/collectl.pl")
 
 
-class FabricCollectlExecutor:
+class FabricCollectlExecutor(Task):
     """
     """
 
-    def __init__(self, host, rawp_file, stderr_file=None, collectl_path=None):
-        self.host = host
+    def __init__(self, exec_args, rawp_file, stderr_file=None, collectl_path=None):
+        self.exec_args = exec_args
         self.rawp_file = rawp_file
         self.stderr_file = stderr_file
         self.stderr_temp = stderr_file is None
@@ -110,6 +123,9 @@ class FabricCollectlExecutor:
         self.collectl_path = collectl_path
 
     def execute_collectl(self):
+        execute(self, **self.exec_args)
+
+    def run(self):
         if self.stderr_temp:
             stderr_tuple = tempfile.mkstemp()
             os.close(stderr_tuple[0])
@@ -118,16 +134,17 @@ class FabricCollectlExecutor:
         # We will manually check return code
         remote_stdout = run("mktemp /tmp/collectoutput.XXXXXXXXXX").strip()
         remote_stderr = run("mktemp /tmp/collecterror.XXXXXXXXXX").strip()
-        remote_rawp = run("mktemp /tmp/rawp.XXXXXXXXXXX").strip()
-        put(self.collectl_path, remote_rawp)
+        remote_rawp = "/tmp/%s" % os.path.basename(self.rawp_file)
+        put(self.rawp_file, remote_rawp)
 
         with settings(warn_only=True):
-            env.hosts = "localhost"
-            collectl_command_line_builder = CollectlCommandLineBuilder(remote_rawp)
+            collectl_command_line_builder = CollectlCommandLineBuilder(self.collectl_path)
             command_line = collectl_command_line_builder.get(remote_rawp)
-            command_output = run("%s > %s 2> %s" % (command_line, self.collectl_output_file, self.stderr_file))
+            command_output = run("%s > %s 2> %s" % (command_line, remote_stdout, remote_stderr))
             return_code = command_output.return_code
 
+        local("rm %s" % self.collectl_output_file)
+        local("rm %s" % self.stderr_file)
         get(remote_stdout, self.collectl_output_file)
         get(remote_stderr, self.stderr_file)
 
@@ -165,8 +182,12 @@ class LocalCollectlExecutorFactory:
     >>> contents.strip()
     'Hello World'
     """
-    def get_collectl_executor(self, rawp_file, stderr_file=None, collectl_path=None):
-        return CollectlExecutor(rawp_file, stderr_file, collectl_path)
+
+    def __init__(self, host, user, collectl_path=None):
+        self.collectl_path = collectl_path
+
+    def get_collectl_executor(self, rawp_file, stderr_file=None):
+        return CollectlExecutor(rawp_file, stderr_file, self.collectl_path)
 
 
 class CollectlExecutor:
@@ -458,8 +479,11 @@ class BaseCollectlSqlDumper:
         for execution in executions:
             for statement in self.get_statements_for_execution(execution, host):
                 statements.append(statement)
-        statements.append("INSERT INTO PROCESSED_COLLECTL_LOGS (NAME) VALUES ('%s');" % escape_quotes(file))
-        self.handle_statements(statements)
+        if len(statements) == 0:
+            print "Skipping file %s - yielded no statements." % file
+        else:
+            statements.append("INSERT INTO PROCESSED_COLLECTL_LOGS (NAME) VALUES ('%s');" % escape_quotes(file))
+            self.handle_statements(statements)
 
     def get_statements_for_execution(self, execution, host):
         start = execution[0]
@@ -592,7 +616,7 @@ class CollectlSqlDumperFactroy:
 
 class CollectlExecutionMerger:
     """
-    In an effort to reduce records produced, merge executions that only occur at one timestamp and have the same executable and uid. 
+    In an effort to reduce records produced, merge executions that only occur at one timestamp and have the same executable and uid.
 
     >>> def get_count(executions): merger = CollectlExecutionMerger(); merger.merge(executions); return len(merger.get_merged_executions())
     >>> def test_time(str_time = '20110818 00:02:00'): return CollectlSummary.parse_timestamp(str_time)
@@ -713,7 +737,7 @@ class CollectlFileScanner:
 
     def execute(self, collectl_executor_factory):
         self.log_start()
-        executor = collectl_executor_factory.get_collectl_executor(self.rawp_file, self.stderr_path, self.collectl_path)
+        executor = collectl_executor_factory.get_collectl_executor(self.rawp_file, self.stderr_path)
         executor.execute_collectl()
         collectl_output_file = executor.output_file()
         executions = self.collectl_summary_factory.build_for(collectl_output_file)
@@ -796,14 +820,33 @@ class LogRecorder:
         self.delegate.log_end(filename)
 
 
+def build_consumers(queue, options):
+    consumers_config = read_yaml("consumers.yaml")
+    consumers = []
+    for consumer_config in consumers_config["consumers"]:
+        host = consumer_config["host"]
+        user = consumer_config["user"]
+        threads = consumer_config["threads"]
+        consumer = CollectlConsumer(queue, options, host, user, threads)
+        consumers.append(consumer)
+    return consumers
+
+
+def read_yaml(yaml_file):
+    with open(yaml_file) as in_handle:
+        return yaml.load(in_handle)
+
+
 class CollectlConsumer:
 
-    def __init__(self, queue):
+    def __init__(self, queue, options, host, user, thread_count):
         self.queue = queue
-        self.collectl_executor_factory = FabricCollectlExecutorFactory("localhost")
-        t = threading.Thread(target=self.execute_file_parser)
-        t.daemon = True
-        t.start()
+        self.options = options
+        self.collectl_executor_factory = LocalCollectlExecutorFactory(host, user, options.collectl_path)
+        for i in range(thread_count):
+            t = threading.Thread(target=self.execute_file_parser)
+            t.daemon = True
+            t.start()
 
     def execute_file_parser(self):
         while True:
@@ -859,7 +902,7 @@ class CollectlDirectoryScanner:
             potential_files.extend([dir_file for dir_file in os.listdir(self.directory)])
         while len(potential_files) > 0 and (self.batch_size == None or self.batch_count < self.batch_size):
             dir_file = potential_files.pop()
-            if os.path.isdir(os.path.join(self.directory, dir_file)):
+            if os.path.isdir(self.__get_path(dir_file)):
                 potential_files.extend([os.path.join(dir_file, child_file) for child_file in os.listdir(os.path.join(self.directory, dir_file))])
             elif self.__do_parse_file(dir_file):
                 self.batch_count = self.batch_count + 1
@@ -869,8 +912,7 @@ class CollectlDirectoryScanner:
         self.queue = Queue.Queue(32)
         self.all_items_added = False
 
-        for i in range(self.options.num_threads):
-            CollectlConsumer(self.queue)
+        build_consumers(self.queue, self.options)
 
         for file_parser in self.get_node_scanners():
             self.queue.put(file_parser, True)
@@ -878,7 +920,12 @@ class CollectlDirectoryScanner:
         self.queue.join()
 
     def __do_parse_file(self, dir_file):
-        return self.__filename_matches(dir_file) and not self.__previously_parsed(dir_file)
+        return self.__filename_matches(dir_file) and \
+            not self.__previously_parsed(dir_file) and \
+            self.__on_date_range(dir_file)
+
+    def __get_path(self, dir_file):
+        return os.path.join(self.directory, dir_file)
 
     def __filename_matches(self, dir_file):
         date_match = "\w+"
@@ -886,6 +933,21 @@ class CollectlDirectoryScanner:
             date_match = self.date
         do_parse = re.match("^(.*/)?\w+-%s-\w+.rawp.gz$" % date_match, dir_file)
         return do_parse is not None
+
+    def __on_date_range(self, dir_file):
+        from_date = self.options.from_date
+        to_date = self.options.to_date
+        on_range = True
+        if from_date or to_date:
+            modified_seconds = os.path.getmtime(self.__get_path(dir_file))
+            modified_time = time.localtime(modified_seconds)
+            if from_date and (from_date > modified_time):
+                on_range = False
+            elif to_date and (to_date < modified_time):
+                on_range = False
+        #print "On range (%s, %s): %s -> %s " % (str(from_date), str(to_date), dir_file, str(on_range))
+        return on_range
+                
 
     def __previously_parsed(self, dir_file):
         return self.log_recorder.previously_recorded(dir_file)
@@ -904,7 +966,7 @@ class CollectlDirectoryScanner:
         self.batch_size = options.batch_size
         self.log_recorder = LogRecorder(options, host)
         self.batch_count = 0
-
+        
 
 def has_text(input):
     """
@@ -948,12 +1010,13 @@ class CollectlParseOptions(BaseCollectlParseOptions):
         from optparse import OptionParser
         parser = OptionParser()
         parser.add_option("--date", dest="date", help="Date in format YYYYMMDD")
+        parser.add_option("--from", dest="from_date", help="Date in format YYYYMMDD")
+        parser.add_option("--to", dest="to_date", help="Date in format YYYYMMDD")
         parser.add_option("--hosts", dest="hosts", help="A comma-separated list of subdirectories to search beneath specified directory (e.g. itasca,calhoun,koronis,elmo)")
         parser.add_option("--directory", dest="directory", help="Directory to scan for collectl files")
         parser.add_option("--batch_size", dest="batch_size", help="Maximum number of files to parse.", type="int", default=None)
         parser.add_option("--output_type", dest="output_type", help="Output type (e.g. postgres, stdout).", default="postgres", choices=["stdout", "postgres"])
         parser.add_option("--log_directory", dest="log_directory", help="Directory to record information about which files have been processed, used only if output type is stdout.", default="collectl_parse_log")
-        parser.add_option("--num_threads", dest="num_threads", type="int", default=1)
         parser.add_option("--collectl_path", dest="collectl_path", help="Path to collectl script/executable, if not specified this should be on the caller's PATH", default=None)
 
         parser.add_option("--pg_database", dest="pg_database", default=None)
@@ -973,12 +1036,21 @@ class CollectlParseOptions(BaseCollectlParseOptions):
         self.output_type = options.output_type
         self.scan = not options.check_args_only
         self.check_database_connection = options.check_database_connection
-        self.num_threads = options.num_threads
         self.collectl_path = options.collectl_path
 
         if not has_text(options.hosts):
             parser.error("Argument hosts not specified.")
         self.hosts = options.hosts.split(",")
+        
+        if has_text(options.from_date):
+            self.from_date = self.__parse_time(options.from_date)
+        else:
+            self.from_date = None
+            
+        if has_text(options.to_date):
+            self.to_date = self.__parse_time(options.to_date)
+        else:
+            self.to_date = None
 
         if not has_text(self.directory):
             parser.error("Directory to scan not specified.")
@@ -990,6 +1062,9 @@ class CollectlParseOptions(BaseCollectlParseOptions):
             self.pg_password = self.__get_database_option(parser, "pg_password")
             self.pg_host = self.__get_database_option(parser, "pg_host", "localhost")
             self.pg_port = self.__get_database_option(parser, "pg_port")
+
+    def __parse_time(self, date_str):
+        return time.strptime(date_str, '%Y%m%d')
 
 
 def main():

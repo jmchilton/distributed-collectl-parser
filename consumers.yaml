@@ -1,0 +1,9 @@
+---
+
+consumers:
+#  - host: gust
+#    user: chilton
+#    threads: 1
+  - host: appdev-dom0
+    user: softacct
+    threads: 5
