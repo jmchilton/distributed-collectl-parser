@@ -4,14 +4,15 @@ import os
 import re
 import subprocess
 import tempfile
-from datetime import datetime, timedelta, strptime
+from datetime import datetime, timedelta
 import time
 import threading
 import Queue
 
 import yaml
 
-import cuisine
+from cuisine import file_is_dir, mode_user, mode_local
+from cuisine import run as c_run
 
 from fabric.api import run, get, put, execute, local, env, cd
 from fabric.tasks import Task
@@ -197,7 +198,7 @@ class CollectlExecutor:
     def __init__(self, rawp_file, stderr_file=None, collectl_path=None):
         if not os.path.exists(rawp_file):
             temp_rawp = "/tmp/%s" % os.path.basename(rawp_file)
-            get(self.rawp_file, temp_rawp)
+            get(rawp_file, temp_rawp)
             self.rawp_file = temp_rawp
             self.delete_rawp = True
         else:
@@ -226,7 +227,7 @@ class CollectlExecutor:
     def _cleanup(self):
         try:
             if self.delete_rawp:
-                os.remote(self.rawp_file)
+                os.remove(self.rawp_file)
         finally:
             pass
         try:
@@ -926,20 +927,24 @@ class CollectlDirectoryScanner:
 
     def get_node_scanners(self):
         potential_files = []
-        if cuisine.file_is_dir(self.directory):
-            potential_files.extend(self._list_dir(self.directory))
+        if file_is_dir(self.directory):
+            potential_files.extend(self._list_dir(self.directory, append_dir_file=False))
         while len(potential_files) > 0 and (self.batch_size == None or self.batch_count < self.batch_size):
             dir_file = potential_files.pop()
-            if cuisine.file_is_dir(self.__get_path(dir_file)):
+            if file_is_dir(self.__get_path(dir_file)):
                 potential_files.extend(self._list_dir(dir_file))
             elif self.__do_parse_file(dir_file):
                 self.batch_count = self.batch_count + 1
                 yield self.__build_file_parser(dir_file)
 
-    def _list_dir(self, dir_file):
+    def _list_dir(self, dir_file, append_dir_file=True):
         directory_path = os.path.join(self.directory, dir_file)
         with cd(directory_path):
-            return [os.path.join(dir_file, line.strip()) for line in cuisine.run("ls -l").split("\n")]
+            ls_files = c_run("/bin/bash -c 'ls | awk \"{ print $1 \"}'").split("\n")
+            if append_dir_file:
+                return [os.path.join(dir_file, line.strip()) for line in ls_files]
+            else:
+                return [line.strip() for line in ls_files]
 
     def execute(self):
         self.queue = Queue.Queue(32)
@@ -969,7 +974,7 @@ class CollectlDirectoryScanner:
 
     def __get_time_from_filename(self, file_name):
         match = re.match("^(.*/)?\w+-(\w+)-\w+.rawp.gz$", file_name)
-        return int(strptime(match.group(2), "%y%m%d").strftime("%s"))
+        return int(datetime.strptime(match.group(2), "%y%m%d").strftime("%s"))
 
     def __on_date_range(self, dir_file):
         from_date = self.options.from_date
@@ -1105,8 +1110,8 @@ class CollectlParseOptions(BaseCollectlParseOptions):
 
         if not has_text(self.directory):
             parser.error("Directory to scan not specified.")
-        if not os.path.isdir(self.directory):
-            parser.error("Invalid directory specified - %s does not appear to be directory." % self.directory)
+        #if not os.path.isdir(self.directory):
+        #    parser.error("Invalid directory specified - %s does not appear to be directory." % self.directory)
         if self.output_type == "postgres":
             self.pg_database = self.__get_database_option(parser, "pg_database")
             self.pg_username = self.__get_database_option(parser, "pg_username")
@@ -1124,11 +1129,12 @@ def main():
         PostgresCollectlSqlDumper(options)
     if options.remote_host:
         env.user = options.remote_user
-        env.hosts = options.remote_host
+        env.host_string = options.remote_host
         env.key_filename = options.ssh_key
-        cuisine.mode_user()
+        env.disable_known_hosts = True
+        mode_user()
     else:
-        cuisine.mode_local()
+        mode_local()
     if options.scan:
         for host in options.hosts:
             CollectlDirectoryScanner(options, host).execute()
