@@ -4,14 +4,16 @@ import os
 import re
 import subprocess
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, strptime
 import time
 import threading
 import Queue
 
 import yaml
 
-from fabric.api import run, get, put, env, execute, local, task
+import cuisine
+
+from fabric.api import run, get, put, execute, local, env, cd
 from fabric.tasks import Task
 from fabric.context_managers import settings
 # parse_collectl.py  --directory /project/collectl --hosts itasca,koronis,elmo,calhoun --num_threads 4
@@ -193,7 +195,15 @@ class LocalCollectlExecutorFactory:
 class CollectlExecutor:
 
     def __init__(self, rawp_file, stderr_file=None, collectl_path=None):
-        self.rawp_file = rawp_file
+        if not os.path.exists(rawp_file):
+            temp_rawp = "/tmp/%s" % os.path.basename(rawp_file)
+            get(self.rawp_file, temp_rawp)
+            self.rawp_file = temp_rawp
+            self.delete_rawp = True
+        else:
+            self.rawp_file = rawp_file
+            self.delete_rawp = False
+
         self.stderr_file = stderr_file
         self.stderr_temp = stderr_file is None
 
@@ -201,11 +211,31 @@ class CollectlExecutor:
         self.collectl_command_line_builder = CollectlCommandLineBuilder(collectl_path)
 
     def execute_collectl(self):
+        try:
+            self._setup()
+            self._run_collectl()
+        finally:
+            self._cleanup()
+
+    def _setup(self):
         if self.stderr_temp:
             stderr_tuple = tempfile.mkstemp()
             os.close(stderr_tuple[0])
             self.stderr_file = stderr_tuple[1]
 
+    def _cleanup(self):
+        try:
+            if self.delete_rawp:
+                os.remote(self.rawp_file)
+        finally:
+            pass
+        try:
+            if self.stderr_temp:
+                os.remove(self.stderr_file)
+        finally:
+            pass
+
+    def _run_collectl(self):
         command_line = self.collectl_command_line_builder.get(self.rawp_file)
         stdout_fileno = self.collectl_output_file[0]
         stderr_stream = open(self.stderr_file, 'w')
@@ -219,8 +249,6 @@ class CollectlExecutor:
         if return_code != 0:
             stderr_contents = self.__read_stderr()
             raise RuntimeError("collectl did not return a status code of 0, process standard error was %s" % stderr_contents)
-        if self.stderr_temp:
-            os.remove(self.stderr_file)
 
     def __read_stderr(self):
         file = open(self.stderr_file, 'r')
@@ -898,15 +926,20 @@ class CollectlDirectoryScanner:
 
     def get_node_scanners(self):
         potential_files = []
-        if os.path.isdir(self.directory):
-            potential_files.extend([dir_file for dir_file in os.listdir(self.directory)])
+        if cuisine.file_is_dir(self.directory):
+            potential_files.extend(self._list_dir(self.directory))
         while len(potential_files) > 0 and (self.batch_size == None or self.batch_count < self.batch_size):
             dir_file = potential_files.pop()
-            if os.path.isdir(self.__get_path(dir_file)):
-                potential_files.extend([os.path.join(dir_file, child_file) for child_file in os.listdir(os.path.join(self.directory, dir_file))])
+            if cuisine.file_is_dir(self.__get_path(dir_file)):
+                potential_files.extend(self._list_dir(dir_file))
             elif self.__do_parse_file(dir_file):
                 self.batch_count = self.batch_count + 1
                 yield self.__build_file_parser(dir_file)
+
+    def _list_dir(self, dir_file):
+        directory_path = os.path.join(self.directory, dir_file)
+        with cd(directory_path):
+            return [os.path.join(dir_file, line.strip()) for line in cuisine.run("ls -l").split("\n")]
 
     def execute(self):
         self.queue = Queue.Queue(32)
@@ -934,12 +967,16 @@ class CollectlDirectoryScanner:
         do_parse = re.match("^(.*/)?\w+-%s-\w+.rawp.gz$" % date_match, dir_file)
         return do_parse is not None
 
+    def __get_time_from_filename(self, file_name):
+        match = re.match("^(.*/)?\w+-(\w+)-\w+.rawp.gz$", file_name)
+        return int(strptime(match.group(2), "%y%m%d").strftime("%s"))
+
     def __on_date_range(self, dir_file):
         from_date = self.options.from_date
         to_date = self.options.to_date
         on_range = True
         if from_date or to_date:
-            modified_seconds = os.path.getmtime(self.__get_path(dir_file))
+            modified_seconds = self.__get_time_from_filename(dir_file)
             modified_time = time.localtime(modified_seconds)
             if from_date and (from_date > modified_time):
                 on_range = False
@@ -947,7 +984,7 @@ class CollectlDirectoryScanner:
                 on_range = False
         #print "On range (%s, %s): %s -> %s " % (str(from_date), str(to_date), dir_file, str(on_range))
         return on_range
-                
+
 
     def __previously_parsed(self, dir_file):
         return self.log_recorder.previously_recorded(dir_file)
@@ -966,7 +1003,7 @@ class CollectlDirectoryScanner:
         self.batch_size = options.batch_size
         self.log_recorder = LogRecorder(options, host)
         self.batch_count = 0
-        
+
 
 def has_text(input):
     """
@@ -1019,6 +1056,10 @@ class CollectlParseOptions(BaseCollectlParseOptions):
         parser.add_option("--log_directory", dest="log_directory", help="Directory to record information about which files have been processed, used only if output type is stdout.", default="collectl_parse_log")
         parser.add_option("--collectl_path", dest="collectl_path", help="Path to collectl script/executable, if not specified this should be on the caller's PATH", default=None)
 
+        parser.add_option("--remote_host")
+        parser.add_option("--remote_user")
+        parser.add_option("--ssh_key")
+
         parser.add_option("--pg_database", dest="pg_database", default=None)
         parser.add_option("--pg_username", dest="pg_username", default=None)
         parser.add_option("--pg_password", dest="pg_password", default=None)
@@ -1038,15 +1079,25 @@ class CollectlParseOptions(BaseCollectlParseOptions):
         self.check_database_connection = options.check_database_connection
         self.collectl_path = options.collectl_path
 
+        self.remote_host = options.remote_host
+
+        self.remote_user = options.remote_user
+        if not self.remote_user:
+            self.remote_user = os.environ['USER']
+
+        self.ssh_key = options.ssh_key
+        if not self.ssh_key:
+            self.ssh_key = os.path.join(os.environ['HOME'], '.ssh', 'id_dsa')
+
         if not has_text(options.hosts):
             parser.error("Argument hosts not specified.")
         self.hosts = options.hosts.split(",")
-        
+
         if has_text(options.from_date):
             self.from_date = self.__parse_time(options.from_date)
         else:
             self.from_date = None
-            
+
         if has_text(options.to_date):
             self.to_date = self.__parse_time(options.to_date)
         else:
@@ -1071,6 +1122,13 @@ def main():
     options = CollectlParseOptions()
     if options.check_database_connection:
         PostgresCollectlSqlDumper(options)
+    if options.remote_host:
+        env.user = options.remote_user
+        env.hosts = options.remote_host
+        env.key_filename = options.ssh_key
+        cuisine.mode_user()
+    else:
+        cuisine.mode_local()
     if options.scan:
         for host in options.hosts:
             CollectlDirectoryScanner(options, host).execute()
