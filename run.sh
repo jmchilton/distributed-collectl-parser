@@ -1,7 +1,7 @@
 #!/bin/bash
 
 . ~/.pgvars
-COLLECTL_PATH=/home/softacct/collectl/collectl.pl
+COLLECTL_PATH=$HOME/collectl/collectl.pl
 #HOSTS="elmod,elmo,koronis"
 HOSTS="koronis,elmod,calhoun"
 RAW_DIRECTORY=/project/collectl
