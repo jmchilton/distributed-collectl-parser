@@ -974,7 +974,7 @@ class CollectlDirectoryScanner:
 
     def __get_time_from_filename(self, file_name):
         match = re.match("^(.*/)?\w+-(\w+)-\w+.rawp.gz$", file_name)
-        return int(datetime.strptime(match.group(2), "%y%m%d").strftime("%s"))
+        return int(datetime.strptime(match.group(2), "%Y%m%d").strftime("%s"))
 
     def __on_date_range(self, dir_file):
         from_date = self.options.from_date
