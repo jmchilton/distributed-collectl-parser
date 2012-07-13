@@ -940,7 +940,10 @@ class CollectlDirectoryScanner:
     def _list_dir(self, dir_file, append_dir_file=True):
         directory_path = os.path.join(self.directory, dir_file)
         with cd(directory_path):
-            ls_files = c_run("/bin/bash -c 'ls | awk \"{ print $1 \"}'").split("\n")
+            ls_str = c_run("/bin/bash -c 'ls | awk \"{ print $1 \"}'").strip()
+            if not ls_str:
+                return []
+            ls_files = ls_str.split("\n")
             if append_dir_file:
                 return [os.path.join(dir_file, line.strip()) for line in ls_files]
             else:
