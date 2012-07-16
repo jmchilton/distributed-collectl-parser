@@ -941,9 +941,10 @@ class CollectlDirectoryScanner:
         # Small optimization don't hit file system (local or via fabric) if this
         # doesn't look like a directory
         if path.endswith('.gz'):
-            return False
+            is_directory = False
         else:
-            file_is_dir(path)
+            is_directory = file_is_dir(path)
+        return is_directory
 
     def _list_dir(self, dir_file, append_dir_file=True):
         directory_path = os.path.join(self.directory, dir_file)
