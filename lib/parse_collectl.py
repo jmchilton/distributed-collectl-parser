@@ -927,17 +927,17 @@ class CollectlDirectoryScanner:
 
     def get_node_scanners(self):
         potential_files = []
-        if self.is_directory(self.directory):
+        if self._is_directory(self.directory):
             potential_files.extend(self._list_dir(self.directory, append_dir_file=False))
         while len(potential_files) > 0 and (self.batch_size == None or self.batch_count < self.batch_size):
             dir_file = potential_files.pop()
-            if self.is_directory(self.__get_path(dir_file)):
+            if self._is_directory(self.__get_path(dir_file)):
                 potential_files.extend(self._list_dir(dir_file))
             elif self.__do_parse_file(dir_file):
                 self.batch_count = self.batch_count + 1
                 yield self.__build_file_parser(dir_file)
 
-    def is_directory(path):
+    def _is_directory(self, path):
         # Small optimization don't hit file system (local or via fabric) if this
         # doesn't look like a directory
         if path.endswith('.gz'):
