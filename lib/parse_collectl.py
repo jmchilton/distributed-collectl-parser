@@ -508,11 +508,11 @@ class BaseCollectlSqlDumper:
         for execution in executions:
             for statement in self.get_statements_for_execution(execution, host):
                 statements.append(statement)
-        if len(statements) == 0:
-            print "Skipping file %s - yielded no statements." % file
-        else:
-            statements.append("INSERT INTO PROCESSED_COLLECTL_LOGS (NAME) VALUES ('%s');" % escape_quotes(file))
-            self.handle_statements(statements)
+        num_statements = len(statements)
+        #if num_statements == 0:
+        print "WARNING: Skipping file %s - yielded no statements." % file
+        statements.append("INSERT INTO PROCESSED_COLLECTL_LOGS (NAME, NUM_STATEMENTS) VALUES ('%s', %d);" % (escape_quotes(file), num_statements))
+        self.handle_statements(statements)
 
     def get_statements_for_execution(self, execution, host):
         start = execution[0]
