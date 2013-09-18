@@ -7,14 +7,15 @@ import tempfile
 from datetime import datetime, timedelta
 import time
 import threading
+import getpass
 import Queue
 
 import yaml
 
 from cuisine import file_is_dir, mode_user, mode_local
-from cuisine import run as c_run
+from cuisine import run as c_run, cd
 
-from fabric.api import run, get, put, execute, local, env, cd
+from fabric.api import run, get, put, execute, local, env
 from fabric.tasks import Task
 from fabric.context_managers import settings
 # parse_collectl.py  --directory /project/collectl --hosts itasca,koronis,elmo,calhoun --num_threads 4
@@ -853,9 +854,9 @@ def build_consumers(queue, options):
     consumers_config = read_yaml("consumers.yaml")
     consumers = []
     for consumer_config in consumers_config["consumers"]:
-        host = consumer_config["host"]
-        user = consumer_config["user"]
-        threads = consumer_config["threads"]
+        host = consumer_config.get("host", "localhost")
+        user = consumer_config.get("user", getpass.getuser())
+        threads = consumer_config.get("threads", 1)
         consumer = CollectlConsumer(queue, options, host, user, threads)
         consumers.append(consumer)
     return consumers
@@ -948,6 +949,7 @@ class CollectlDirectoryScanner:
 
     def _list_dir(self, dir_file, append_dir_file=True):
         directory_path = os.path.join(self.directory, dir_file)
+
         with cd(directory_path):
             ls_str = c_run("/bin/bash -c 'ls | awk \"{ print $1 \"}'").strip()
             if not ls_str:
@@ -1001,7 +1003,6 @@ class CollectlDirectoryScanner:
                 on_range = False
         #print "On range (%s, %s): %s -> %s " % (str(from_date), str(to_date), dir_file, str(on_range))
         return on_range
-
 
     def __previously_parsed(self, dir_file):
         return self.log_recorder.previously_recorded(dir_file)
@@ -1146,9 +1147,11 @@ def main():
         env.disable_known_hosts = True
         mode_user()
     else:
+        print "Mode local"
         mode_local()
     if options.scan:
         for host in options.hosts:
+            print "Handling host %s" % host
             CollectlDirectoryScanner(options, host).execute()
 
 if __name__ == "__main__":
